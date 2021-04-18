@@ -2,9 +2,15 @@ import discord
 import youtube_dl
 from discord.ext import commands
 import asyncio
+import requests
+from data import db_session
+from data.user import User
+import datetime
 
+
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix='~', intents=intents)
 TOKEN = 'token'
-bot = commands.Bot(command_prefix='~')
 
 ytdl_format_options = {
     'format': 'bestaudio/best',
@@ -12,7 +18,7 @@ ytdl_format_options = {
     'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
-    'ignoreerrors': False,
+    'ignoreerrors': True,
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
@@ -27,39 +33,65 @@ ffmpeg_options = {
 ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
 
 players = {}
+queue = asyncio.Queue()
+player = None
+db_session.global_init('db/discord_users.db')
+db_sess = db_session.create_session()
 
 
-# Класс для превращения ссылки в объект, который может проиграть discord-бот
-class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5):
-        super().__init__(source, volume)
+class UrlError(Exception):
+    pass
 
-        self.data = data
 
-        self.title = data.get('title')
-        self.url = data.get('url')
-
-    @classmethod
-    async def from_url(cls, url, *, loop=None, stream=False):
-        loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
-
-        if 'entries' in data:
-            # Взять первый объект
-            data = data['entries'][0]
-
-        filename = data['url'] if stream else ytdl.prepare_filename(data)
-        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+def is_url(string: str):
+    protocol = string.startswith('https://') or string.startswith('http://')
+    address = 'youtube.com' in string
+    params = 'watch?v=' in string
+    return protocol and address and params
 
 
 @bot.event
 async def on_ready():
+    global db_sess
     print(f'{bot.user} подключен к Discord!')
     for guild in bot.guilds:
         print(
             f'{bot.user} подключились к чату:\n'
             f'{guild.name}(id: {guild.id})\n'
         )
+        users_id = [int(user.user_id) for user in db_sess.query(User).all()]
+        for elem in guild.members:
+            if elem.id in users_id:
+                continue
+            user = User()
+            user.user_id = int(elem.id)
+            db_sess.add(user)
+            db_sess.commit()
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    global db_sess
+    user = User()
+    user.user_id = member.id
+    db_sess.add(user)
+    db_sess.commit()
+    for guild in bot.guilds:
+        for channel in guild.channels:
+            if channel.id == 407923847602503684:
+                await channel.send(f'Приветствуем, <@{member.id}>!')
+                return
+
+
+# @bot.event
+# async def on_message(message: discord.Message):
+#     global db_sess
+#     if message.author == bot.user:
+#         return
+#     author_id = message.author.id
+#     user = db_sess.query(User).filter(User.user_id == author_id)[0]
+#     user.add_message()
+#     db_sess.commit()
 
 
 @bot.event
@@ -69,19 +101,66 @@ async def on_command_error(ctx, error):
 
 
 @bot.command(name='play', pass_context=True)
-async def play(ctx, url):
-    author_channel = ctx.message.author.voice.channel
-    await author_channel.connect()
-    # # server = ctx.message.server
-    # player = author_channel.create_ytdl_player(url)
-    # # players[server.id] = player
-    # player.start()
-    with youtube_dl.YoutubeDL(ytdl_format_options) as ydl:
-        song_info = ydl.extract_info(url, download=False)
-    ctx.message.guild.voice_client.play(
-        discord.FFmpegPCMAudio(song_info["formats"][0]["url"], executable='ffmpeg/bin/ffmpeg.exe'))
-    ctx.message.guild.voice_client.source = discord.PCMVolumeTransformer(ctx.message.guild.voice_client.source)
-    ctx.message.guild.voice_client.source.volume = 1
+async def play(ctx, *url):
+    # try:
+    global player
+    if len(url) == 0:
+        return
+    elif len(url) == 1 and not is_url(url[0]) and 'https://' in url[0]:
+        raise UrlError
+    elif len(url) != 1 or not is_url(url[0]):
+        url = ' '.join(url)
+        parts = '%20'.join(url.split())
+        res = requests.get(
+            f'https://youtube.googleapis.com/youtube/v3/search?part=snippet&maxResults=25&q={parts}&key={YOUTUBE_TOKEN}').json()
+        id = res['items'][0]['id']['videoId']
+        url = f'https://www.youtube.com/watch?v={id}'
+    elif is_url(url[0]):
+        url = url[0]
+    if player is None:
+        author_channel = ctx.message.author.voice.channel
+        await author_channel.connect()
+        player = ctx.message.guild.voice_client
+    await queue.put(url)
+    await ctx.message.channel.send('Добавлено в очередь:\n' + url)
+    while not queue.empty():
+        if not player.is_playing():
+            url = await queue.get()
+            with youtube_dl.YoutubeDL(ytdl_format_options) as ydl:
+                song_info = ydl.extract_info(url, download=False)
+            ctx.message.guild.voice_client.play(
+                discord.FFmpegPCMAudio(song_info["formats"][0]["url"]))
+            ctx.message.guild.voice_client.source = discord.PCMVolumeTransformer(ctx.message.guild.voice_client.source)
+            ctx.message.guild.voice_client.source.volume = 1
+            await ctx.message.channel.send('Сейчас играет:\n' + url)
+        elif player.is_playing():
+            await asyncio.sleep(1)
+    # except UrlError:
+    #     await ctx.message.channel.send('Некорректная ссылка')
+    # except Exception as e:
+    #     print(e)
+
+
+@bot.command(pass_context=True, name='pause')
+async def pause(ctx):
+    if ctx.message.guild.voice_client.is_playing():
+        ctx.message.guild.voice_client.pause()
+
+
+@bot.command(pass_context=True, name='stop')
+async def stop(ctx):
+    global queue, player
+    ctx.message.guild.voice_client.stop()
+    await ctx.message.guild.voice_client.disconnect()
+    queue = asyncio.Queue()
+    await ctx.message.channel.send('Проигрывание завершено')
+    player = None
+
+
+@bot.command(pass_context=True, name='resume')
+async def resume(ctx):
+    if ctx.message.guild.voice_client.is_paused():
+        ctx.message.guild.voice_client.resume()
 
 
 @bot.command(pass_context=True, name='leave')
@@ -111,7 +190,6 @@ async def deleterole(ctx, role_name):
         await ctx.send(f"Роль {role_name} удалена!")
     else:
         await ctx.send("Такой роли не существует!")
-
 
 
 bot.run(TOKEN)
