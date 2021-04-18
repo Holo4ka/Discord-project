@@ -3,7 +3,7 @@ import youtube_dl
 from discord.ext import commands
 import asyncio
 
-TOKEN = 'ODI0MTY2OTg3NTQxNjQzMjk0.YFrbUg.yLNjZ8Ia4vFMd3gdaW_hj5rFo4U'
+TOKEN = 'token'
 bot = commands.Bot(command_prefix='~')
 
 ytdl_format_options = {
