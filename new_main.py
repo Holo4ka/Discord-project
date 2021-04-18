@@ -3,9 +3,13 @@ import youtube_dl
 from discord.ext import commands
 import asyncio
 import requests
+from data import db_session
+from data.user import User
+import datetime
 
 
-bot = commands.Bot(command_prefix='~')
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix='~', intents=intents)
 
 ytdl_format_options = {
     'format': 'bestaudio/best',
@@ -30,6 +34,8 @@ ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
 players = {}
 queue = asyncio.Queue()
 player = None
+db_session.global_init('db/discord_users.db')
+db_sess = db_session.create_session()
 
 
 class UrlError(Exception):
@@ -45,12 +51,47 @@ def is_url(string: str):
 
 @bot.event
 async def on_ready():
+    global db_sess
     print(f'{bot.user} подключен к Discord!')
     for guild in bot.guilds:
         print(
             f'{bot.user} подключились к чату:\n'
             f'{guild.name}(id: {guild.id})\n'
         )
+        users_id = [user.user_id for user in db_sess.query(User).all()]
+        for elem in guild.members:
+            if elem.id in users_id:
+                continue
+            user = User()
+            user.user_id = elem.id
+            db_sess.add(user)
+            db_sess.commit()
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    global db_sess
+    user = User()
+    user.user_id = member.id
+    db_sess.add(user)
+    db_sess.commit()
+    for guild in bot.guilds:
+        for channel in guild.channels:
+            if channel.id == 407923847602503684:
+                await channel.send(f'Приветствуем, <@{member.id}>!')
+                return
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    global db_sess
+    if message.author == bot.user:
+        return
+    author_id = message.author.id
+    db_sess = db_session.create_session()
+    user = db_sess.query(User).filter(User.user_id == author_id)[0]
+    user.add_message()
+    db_sess.commit()
 
 
 @bot.command(name='play', pass_context=True)
@@ -120,6 +161,18 @@ async def skip(ctx):
     ctx.message.guild.voice_client.stop()
     if not queue.empty():
         await ctx.message.channel.send('Трек пропущен')
+
+
+@bot.command(name='give_role')
+async def giverole(ctx, user: discord.Member, role: discord.Role):
+    await user.add_roles(role)
+    await ctx.send(f"Hey, {user.name} has been giving a role called: {role.name}")
+
+
+@bot.command(name='create_role')
+async def createrole(ctx, role_name):
+    guild = ctx.guild
+    await guild.create_role(name=role_name)
 
 
 bot.run(TOKEN)
