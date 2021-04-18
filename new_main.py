@@ -17,7 +17,7 @@ ytdl_format_options = {
     'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
-    'ignoreerrors': False,
+    'ignoreerrors': True,
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
@@ -58,12 +58,12 @@ async def on_ready():
             f'{bot.user} подключились к чату:\n'
             f'{guild.name}(id: {guild.id})\n'
         )
-        users_id = [user.user_id for user in db_sess.query(User).all()]
+        users_id = [int(user.user_id) for user in db_sess.query(User).all()]
         for elem in guild.members:
             if elem.id in users_id:
                 continue
             user = User()
-            user.user_id = elem.id
+            user.user_id = int(elem.id)
             db_sess.add(user)
             db_sess.commit()
 
@@ -82,55 +82,56 @@ async def on_member_join(member: discord.Member):
                 return
 
 
-@bot.event
-async def on_message(message: discord.Message):
-    global db_sess
-    if message.author == bot.user:
-        return
-    author_id = message.author.id
-    db_sess = db_session.create_session()
-    user = db_sess.query(User).filter(User.user_id == author_id)[0]
-    user.add_message()
-    db_sess.commit()
+# @bot.event
+# async def on_message(message: discord.Message):
+#     global db_sess
+#     if message.author == bot.user:
+#         return
+#     author_id = message.author.id
+#     user = db_sess.query(User).filter(User.user_id == author_id)[0]
+#     user.add_message()
+#     db_sess.commit()
 
 
 @bot.command(name='play', pass_context=True)
 async def play(ctx, *url):
-    try:
-        global player
-        if len(url) == 0:
-            return
-        elif len(url) != 1 or not is_url(url[0]):
-            url = ' '.join(url)
-            if 'youtube.com' not in url:
-                raise UrlError
-            parts = '%20'.join(url.split())
-            res = requests.get(
-                f'https://youtube.googleapis.com/youtube/v3/search?part=snippet&maxResults=25&q={parts}&key={YOUTUBE_TOKEN}').json()
-            id = res['items'][0]['id']['videoId']
-            url = f'https://www.youtube.com/watch?v={id}'
-        if player is None:
-            author_channel = ctx.message.author.voice.channel
-            await author_channel.connect()
-            player = ctx.message.guild.voice_client
-        await queue.put(url)
-        await ctx.message.channel.send('Добавлено в очередь:\n' + url)
-        while not queue.empty():
-            if not player.is_playing():
-                url = await queue.get()
-                with youtube_dl.YoutubeDL(ytdl_format_options) as ydl:
-                    song_info = ydl.extract_info(url, download=False)
-                ctx.message.guild.voice_client.play(
-                    discord.FFmpegPCMAudio(song_info["formats"][0]["url"], executable='ffmpeg.exe'))
-                ctx.message.guild.voice_client.source = discord.PCMVolumeTransformer(ctx.message.guild.voice_client.source)
-                ctx.message.guild.voice_client.source.volume = 1
-                await ctx.message.channel.send('Сейчас играет:\n' + url)
-            elif player.is_playing():
-                await asyncio.sleep(1)
-    except UrlError:
-        await ctx.message.channel.send('Некорректная ссылка')
-    except Exception as e:
-        print(e)
+    # try:
+    global player
+    if len(url) == 0:
+        return
+    elif len(url) == 1 and not is_url(url[0]) and 'https://' in url[0]:
+        raise UrlError
+    elif len(url) != 1 or not is_url(url[0]):
+        url = ' '.join(url)
+        parts = '%20'.join(url.split())
+        res = requests.get(
+            f'https://youtube.googleapis.com/youtube/v3/search?part=snippet&maxResults=25&q={parts}&key={YOUTUBE_TOKEN}').json()
+        id = res['items'][0]['id']['videoId']
+        url = f'https://www.youtube.com/watch?v={id}'
+    elif is_url(url[0]):
+        url = url[0]
+    if player is None:
+        author_channel = ctx.message.author.voice.channel
+        await author_channel.connect()
+        player = ctx.message.guild.voice_client
+    await queue.put(url)
+    await ctx.message.channel.send('Добавлено в очередь:\n' + url)
+    while not queue.empty():
+        if not player.is_playing():
+            url = await queue.get()
+            with youtube_dl.YoutubeDL(ytdl_format_options) as ydl:
+                song_info = ydl.extract_info(url, download=False)
+            ctx.message.guild.voice_client.play(
+                discord.FFmpegPCMAudio(song_info["formats"][0]["url"]))
+            ctx.message.guild.voice_client.source = discord.PCMVolumeTransformer(ctx.message.guild.voice_client.source)
+            ctx.message.guild.voice_client.source.volume = 1
+            await ctx.message.channel.send('Сейчас играет:\n' + url)
+        elif player.is_playing():
+            await asyncio.sleep(1)
+    # except UrlError:
+    #     await ctx.message.channel.send('Некорректная ссылка')
+    # except Exception as e:
+    #     print(e)
 
 
 @bot.command(pass_context=True, name='pause')
