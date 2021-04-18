@@ -84,4 +84,16 @@ async def leave(ctx):
     await author_channel.disconnect()
 
 
+@bot.command(name='give_role')
+async def giverole(ctx, user: discord.Member, role: discord.Role):
+    await user.add_roles(role)
+    await ctx.send(f"Hey, {user.name} has been giving a role called: {role.name}")
+
+
+@bot.command(name='create_role')
+async def createrole(ctx, role_name):
+    guild = ctx.guild
+    await guild.create_role(name=role_name)
+
+
 bot.run(TOKEN)
