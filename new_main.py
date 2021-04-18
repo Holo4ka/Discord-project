@@ -62,6 +62,12 @@ async def on_ready():
         )
 
 
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, discord.ext.commands.errors.DiscordException):
+        await ctx.send("Something has gone wrong.")
+
+
 @bot.command(name='play', pass_context=True)
 async def play(ctx, url):
     author_channel = ctx.message.author.voice.channel
@@ -87,13 +93,25 @@ async def leave(ctx):
 @bot.command(name='give_role')
 async def giverole(ctx, user: discord.Member, role: discord.Role):
     await user.add_roles(role)
-    await ctx.send(f"Hey, {user.name} has been giving a role called: {role.name}")
+    await ctx.send(f"Хей, пользователю {user.name} была выдана роль {role.name}!")
 
 
 @bot.command(name='create_role')
-async def createrole(ctx, role_name):
+async def createrole(ctx, role_name, color=discord.Colour(0)):
     guild = ctx.guild
-    await guild.create_role(name=role_name)
+    await guild.create_role(name=role_name, color=color)
+    await ctx.send(f'Роль {role_name} создалась!')
+
+
+@bot.command(name='delete_role')
+async def deleterole(ctx, role_name):
+    role = discord.utils.get(ctx.guild.roles, name=role_name)
+    if role:
+        await role.delete()
+        await ctx.send(f"Роль {role_name} удалена!")
+    else:
+        await ctx.send("Такой роли не существует!")
+
 
 
 bot.run(TOKEN)
