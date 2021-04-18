@@ -10,7 +10,6 @@ import datetime
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='~', intents=intents)
-TOKEN = 'token'
 
 ytdl_format_options = {
     'format': 'bestaudio/best',
@@ -94,12 +93,6 @@ async def on_member_join(member: discord.Member):
 #     db_sess.commit()
 
 
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, discord.ext.commands.errors.DiscordException):
-        await ctx.send("Something has gone wrong.")
-
-
 @bot.command(name='play', pass_context=True)
 async def play(ctx, *url):
     # try:
@@ -163,10 +156,12 @@ async def resume(ctx):
         ctx.message.guild.voice_client.resume()
 
 
-@bot.command(pass_context=True, name='leave')
-async def leave(ctx):
-    author_channel = ctx.message.author.voice.voice_channel
-    await author_channel.disconnect()
+@bot.command(pass_context=True, name='skip')
+async def skip(ctx):
+    global queue, player
+    ctx.message.guild.voice_client.stop()
+    if not queue.empty():
+        await ctx.message.channel.send('Трек пропущен')
 
 
 @bot.command(name='give_role')
