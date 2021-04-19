@@ -82,6 +82,12 @@ async def on_member_join(member: discord.Member):
                 return
 
 
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, discord.ext.commands.errors.DiscordException):
+        await ctx.send("Something has gone wrong.")
+
+
 # @bot.event
 # async def on_message(message: discord.Message):
 #     global db_sess
