@@ -7,7 +7,6 @@ from data import db_session
 from data.user import User
 import datetime
 
-
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='~', intents=intents)
 
@@ -181,6 +180,12 @@ async def createrole(ctx, role_name, color=discord.Colour(0)):
     guild = ctx.guild
     await guild.create_role(name=role_name, color=color)
     await ctx.send(f'Роль {role_name} создалась!')
+
+
+@bot.command(name='edit_role_color')
+async def editrolecolor(ctx, role: discord.Role, color: discord.Colour):
+    await role.edit(color=color)
+    await ctx.send(f'Цвет роли {role.name} был изменён на {role.color}(hex).')
 
 
 @bot.command(name='delete_role')
