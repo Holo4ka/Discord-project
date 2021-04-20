@@ -83,8 +83,12 @@ async def on_member_join(member: discord.Member):
 
 @bot.event
 async def on_command_error(ctx, error):
-    if isinstance(error, discord.ext.commands.errors.DiscordException):
-        await ctx.send("Something has gone wrong.")
+    if isinstance(error, commands.errors.MissingRequiredArgument):
+        await ctx.send('Проверьте, все ли нужные данные для команды вы написали.')
+    elif isinstance(error, commands.errors.BadArgument):
+        await ctx.send('Проверьте корректность написания данных для команды.')
+    elif isinstance(error, commands.errors.DiscordException):
+        await ctx.send('Что-то пошло не так!')
 
 
 # @bot.event
@@ -186,6 +190,12 @@ async def createrole(ctx, role_name, color=discord.Colour(0)):
 async def editrolecolor(ctx, role: discord.Role, color: discord.Colour):
     await role.edit(color=color)
     await ctx.send(f'Цвет роли {role.name} был изменён на {role.color}(hex).')
+
+
+@bot.command(name='edit_role_name')
+async def editrolename(ctx, role: discord.Role, name):
+    await ctx.send(f'Имя роли {role.name} было изменено на {name}.')
+    await role.edit(name=name)
 
 
 @bot.command(name='delete_role')
