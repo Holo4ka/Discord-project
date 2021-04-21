@@ -8,6 +8,7 @@ from data.user import User
 import datetime
 
 
+TOKEN = 'ODI0MTY2OTg3NTQxNjQzMjk0.YFrbUg.gye7CewvLwA6tO3IpRRpo_zu8XI'
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='~', intents=intents)
 
@@ -82,98 +83,79 @@ async def on_member_join(member: discord.Member):
                 return
 
 
-# @bot.event
-# async def on_message(message: discord.Message):
-#     global db_sess
-#     if message.author == bot.user:
-#         return
-#     author_id = message.author.id
-#     user = db_sess.query(User).filter(User.user_id == author_id)[0]
-#     user.add_message()
-#     db_sess.commit()
-
-
-@bot.command(name='play', pass_context=True)
-async def play(ctx, *url):
-    # try:
-    global player
-    if len(url) == 0:
+@bot.event
+async def on_message(message: discord.Message):
+    global db_sess
+    if message.author == bot.user:
         return
-    elif len(url) == 1 and not is_url(url[0]) and 'https://' in url[0]:
-        raise UrlError
-    elif len(url) != 1 or not is_url(url[0]):
-        url = ' '.join(url)
-        parts = '%20'.join(url.split())
-        res = requests.get(
-            f'https://youtube.googleapis.com/youtube/v3/search?part=snippet&maxResults=25&q={parts}&key={YOUTUBE_TOKEN}').json()
-        id = res['items'][0]['id']['videoId']
-        url = f'https://www.youtube.com/watch?v={id}'
-    elif is_url(url[0]):
-        url = url[0]
-    if player is None:
-        author_channel = ctx.message.author.voice.channel
-        await author_channel.connect()
-        player = ctx.message.guild.voice_client
-    await queue.put(url)
-    await ctx.message.channel.send('Добавлено в очередь:\n' + url)
-    while not queue.empty():
-        if not player.is_playing():
-            url = await queue.get()
-            with youtube_dl.YoutubeDL(ytdl_format_options) as ydl:
-                song_info = ydl.extract_info(url, download=False)
-            ctx.message.guild.voice_client.play(
-                discord.FFmpegPCMAudio(song_info["formats"][0]["url"]))
-            ctx.message.guild.voice_client.source = discord.PCMVolumeTransformer(ctx.message.guild.voice_client.source)
-            ctx.message.guild.voice_client.source.volume = 1
-            await ctx.message.channel.send('Сейчас играет:\n' + url)
-        elif player.is_playing():
-            await asyncio.sleep(1)
-    # except UrlError:
-    #     await ctx.message.channel.send('Некорректная ссылка')
-    # except Exception as e:
-    #     print(e)
+    author_id = message.author.id
+    user = db_sess.query(User).filter(User.user_id == author_id)[0]
+    user.add_message()
+    db_sess.commit()
 
 
-@bot.command(pass_context=True, name='pause')
-async def pause(ctx):
-    if ctx.message.guild.voice_client.is_playing():
-        ctx.message.guild.voice_client.pause()
+@bot.command(name='ban')
+async def ban(ctx, user, reason=None):
+    server = ctx.message.guild
+    await server.ban(user, reason=reason)
+    await ctx.message.channel.send(f'{user.name} был забанен {ctx.message.author}')
+    if reason is not None:
+        await ctx.message.channel.send(f'Причина: {reason}')
 
 
-@bot.command(pass_context=True, name='stop')
-async def stop(ctx):
-    global queue, player
-    ctx.message.guild.voice_client.stop()
-    await ctx.message.guild.voice_client.disconnect()
-    queue = asyncio.Queue()
-    await ctx.message.channel.send('Проигрывание завершено')
-    player = None
+@bot.command(name='kick')
+async def kick(ctx, user, reason):
+    server = ctx.message.guild
+    await server.kick(user, reason=reason)
 
 
-@bot.command(pass_context=True, name='resume')
-async def resume(ctx):
-    if ctx.message.guild.voice_client.is_paused():
-        ctx.message.guild.voice_client.resume()
-
-
-@bot.command(pass_context=True, name='skip')
-async def skip(ctx):
-    global queue, player
-    ctx.message.guild.voice_client.stop()
-    if not queue.empty():
-        await ctx.message.channel.send('Трек пропущен')
+@bot.command(name='mute')
+async def mute(ctx, user):
+    await user.add_roles(507885681289461760)
 
 
 @bot.command(name='give_role')
 async def giverole(ctx, user: discord.Member, role: discord.Role):
     await user.add_roles(role)
-    await ctx.send(f"Hey, {user.name} has been giving a role called: {role.name}")
+    await ctx.send(f"Хей, пользователю {user.name} была выдана роль {role.name}!")
 
 
 @bot.command(name='create_role')
-async def createrole(ctx, role_name):
+async def createrole(ctx, role_name, color=discord.Colour(0)):
     guild = ctx.guild
-    await guild.create_role(name=role_name)
+    await guild.create_role(name=role_name, color=color)
+    await ctx.send(f'Роль {role_name} создалась!')
+
+
+@bot.command(name='edit_role_color')
+async def editrolecolor(ctx, role: discord.Role, color: discord.Colour):
+    await role.edit(color=color)
+    await ctx.send(f'Цвет роли {role.name} был изменён на {role.color}(hex).')
+
+
+@bot.command(name='edit_role_name')
+async def editrolename(ctx, role: discord.Role, name):
+    await ctx.send(f'Имя роли {role.name} было изменено на {name}.')
+    await role.edit(name=name)
+
+
+@bot.command(name='delete_role')
+async def deleterole(ctx, role_name):
+    role = discord.utils.get(ctx.guild.roles, name=role_name)
+    if role:
+        await role.delete()
+        await ctx.send(f"Роль {role_name} удалена!")
+    else:
+        await ctx.send("Такой роли не существует!")
+
+
+@bot.command(name='warn', pass_context=True)
+async def warn(ctx, user, reason):
+    server = ctx.message.guild
+    user = db_sess.query(User).filter(User.user_id == user.id)[0]
+    user.warn()
+    db_sess.commit()
+    await ctx.send('Warn')
 
 
 bot.run(TOKEN)
