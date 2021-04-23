@@ -6,16 +6,18 @@ import requests
 from data import db_session
 from data.user import User
 import os
+import datetime
+import logging
 
-
+TOKEN = 'ODI0MTY2OTg3NTQxNjQzMjk0.YFrbUg.NqQGGY9c4M-g7cgsiWsaTzfEYcU'
+YOUTUBE_TOKEN = 'AIzaSyBiF_oZJFMMHYabcICvUk0dJe5QB4yr-Cc'
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix='~', intents=intents)
-LETTERS = ['_', '-', ' ']
+bot = commands.Bot(command_prefix='~', intents=intents, help_command=None)
 i = 0
 
 ytdl_format_options = {
     'format': 'bestaudio/best',
-    'outtmpl': '%(title)s.webm',
+    'outtmpl': '',
     'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
@@ -32,15 +34,21 @@ ffmpeg_options = {
 }
 
 ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
-
+logging.basicConfig(filename='logs.txt', level=20)
 players = {}
-queue = asyncio.Queue(maxsize=100)
+queue = asyncio.Queue(maxsize=1000)
 player = None
 db_session.global_init('db/discord_users.db')
 db_sess = db_session.create_session()
+OWNER = None
+administration_roles = []
 
 
 class UrlError(Exception):
+    pass
+
+
+class NotAdminError(Exception):
     pass
 
 
@@ -51,9 +59,21 @@ def is_url(string: str):
     return protocol and address and params
 
 
+def check_roles(ctx):
+    author = ctx.message.author
+    administrator = False
+    for role in administration_roles:
+        if role in author.roles:
+            administrator = True
+            break
+    if not administrator:
+        raise NotAdminError
+    return True
+
+
 @bot.event
 async def on_ready():
-    global db_sess
+    global db_sess, OWNER, administration_roles
     print(f'{bot.user} подключен к Discord!')
     for guild in bot.guilds:
         print(
@@ -66,8 +86,13 @@ async def on_ready():
                 continue
             user = User()
             user.user_id = int(elem.id)
+            user.join_date = elem.joined_at
             db_sess.add(user)
             db_sess.commit()
+        for role in guild.roles:
+            if role.permissions.administrator:
+                administration_roles.append(role)
+        print(administration_roles)
 
 
 @bot.event
@@ -75,6 +100,7 @@ async def on_member_join(member: discord.Member):
     global db_sess
     user = User()
     user.user_id = member.id
+    user.join_date = datetime.datetime.now()
     db_sess.add(user)
     db_sess.commit()
     for guild in bot.guilds:
@@ -84,29 +110,20 @@ async def on_member_join(member: discord.Member):
                 return
 
 
-# @bot.event
-# async def on_message(message: discord.Message):
-#     global db_sess
-#     if message.author == bot.user:
-#         return
-#     author_id = message.author.id
-#     user = db_sess.query(User).filter(User.user_id == author_id)[0]
-#     user.add_message()
-#     db_sess.commit()
-
-
-# @bot.event
-# async def on_command_error(ctx, error):
-#     if isinstance(error, commands.errors.MissingRequiredArgument):
-#         await ctx.send('Проверьте, все ли нужные данные для команды вы написали.')
-#     elif isinstance(error, commands.errors.BadArgument):
-#         await ctx.send('Проверьте корректность написания данных для команды.')
-#     elif isinstance(error, commands.errors.CommandInvokeError):
-#         await ctx.send('Скорее всего, у меня нет прав на эту команду.')
-#     elif isinstance(error, UrlError):
-#         await ctx.send('Неправильный URL.')
-#     elif isinstance(error, commands.errors.DiscordException):
-#         await ctx.send('Что-то пошло не так!')
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.errors.MissingRequiredArgument):
+        await ctx.send('Проверьте, все ли нужные данные для команды вы написали.')
+    elif isinstance(error, commands.errors.BadArgument):
+        await ctx.send('Проверьте корректность написания данных для команды.')
+    elif isinstance(error, commands.errors.CommandInvokeError):
+        await ctx.send('Скорее всего, у меня нет прав на эту команду.')
+    elif isinstance(error, UrlError):
+        await ctx.send('Неправильный URL.')
+    elif isinstance(error, NotAdminError):
+        await ctx.send('У вас нет прав на эту команду')
+    elif isinstance(error, commands.errors.DiscordException):
+        await ctx.send('Что-то пошло не так!')
 
 
 async def play(ctx):
@@ -118,7 +135,6 @@ async def play(ctx):
                 discord.FFmpegPCMAudio(f'{current}.webm'))
             await ctx.message.channel.send('Сейчас играет:\n' + '`' + title + '`')
             await asyncio.sleep(duration + 2)
-            os.remove(f'{current}.webm')
     except asyncio.QueueEmpty:
         return
 
@@ -191,140 +207,237 @@ async def resume(ctx):
         await ctx.message.channel.send('Продолжение проигрывания...')
 
 
+@bot.command(name='queue')
+async def show_queue(ctx):
+    channel = ctx.message.channel
+    songs = ''
+    for _ in range(queue.qsize()):
+        url = str(await queue.get())
+        songs = songs + url + '\n'
+    msg = f'''Очередь воспроизведения:
+`{songs}`'''
+    await channel.send(msg)
+
+
 @bot.command(name='ban')
 async def ban(ctx, user: discord.Member, reason=None):
-    server = ctx.guild
-    await server.ban(user, reason=reason)
-    msg = f'{user.name} был забанен.'
-    if reason:
-        msg += f' Причина: {reason}.'
-    await ctx.send(msg)
+    if check_roles(ctx):
+        server = ctx.guild
+        await server.ban(user, reason=reason)
+        msg = f'{user.name} был забанен.'
+        if reason:
+            msg += f' Причина: {reason}.'
+        await ctx.send(msg)
 
 
 @bot.command(name='unban')
 async def unban(ctx, user, reason=None):
-    server = ctx.guild
-    banned_users = await server.bans()
-    user_found = False
-    for ban_entry in banned_users:
-        member = ban_entry.user
-        if member.name == user:
-            unban_user = member
-            user_found = True
-    if not user_found:
-        await ctx.send('Пользователь не найден.')
-        return
-    await server.unban(unban_user)
-    msg = f'{unban_user.name} был разбанен.'
-    if reason:
-        msg += f' Причина: {reason}.'
-    await ctx.send(msg)
+    if check_roles(ctx):
+        server = ctx.guild
+        banned_users = await server.bans()
+        user_found = False
+        for ban_entry in banned_users:
+            member = ban_entry.user
+            if member.name == user:
+                unban_user = member
+                user_found = True
+        if not user_found:
+            await ctx.send('Пользователь не найден.')
+            return
+        await server.unban(unban_user)
+        msg = f'{unban_user.name} был разбанен.'
+        if reason:
+            msg += f' Причина: {reason}.'
+        await ctx.send(msg)
 
 
 @bot.command(name='kick')
 async def kick(ctx, user: discord.Member, reason=None):
-    server = ctx.guild
-    await server.kick(user, reason=reason)
-    msg = f'{user.name} был кикнут.'
-    if reason:
-        msg += f' Причина: {reason}.'
-    await ctx.send(msg)
+    if check_roles(ctx):
+        server = ctx.guild
+        await server.kick(user, reason=reason)
+        msg = f'{user.name} был кикнут.'
+        if reason:
+            msg += f' Причина: {reason}.'
+        await ctx.send(msg)
 
 
 @bot.command(name='mute')
 async def mute(ctx, user: discord.Member, reason=None):
-    mute_role = discord.utils.get(ctx.guild.roles, name='MUTED')
-    await user.add_roles(mute_role)
-    msg = f'{user.name} был замучен.'
-    if reason:
-        msg += f' Причина: {reason}.'
-    await ctx.send(msg)
+    if check_roles(ctx):
+        mute_role = discord.utils.get(ctx.guild.roles, name='MUTED')
+        await user.add_roles(mute_role)
+        msg = f'{user.name} был замучен.'
+        if reason:
+            msg += f' Причина: {reason}.'
+        await ctx.send(msg)
 
 
 @bot.command(name='unmute')
 async def unmute(ctx, user: discord.Member):
-    mute_role = discord.utils.get(ctx.guild.roles, name='MUTED')
-    u_roles = user.roles
-    if mute_role not in u_roles:
-        await ctx.send(f'Пользователь {user.name} не был замучен.')
-        return
-    await user.remove_roles(mute_role)
-    await ctx.send(f'{user.name} был размучен.')
+    if check_roles(ctx):
+        mute_role = discord.utils.get(ctx.guild.roles, name='MUTED')
+        u_roles = user.roles
+        if mute_role not in u_roles:
+            await ctx.send(f'Пользователь {user.name} не был замучен.')
+            return
+        await user.remove_roles(mute_role)
+        await ctx.send(f'{user.name} был размучен.')
 
 
 @bot.command(name='warn', pass_context=True)
-async def warn(ctx, user: discord.User, reason=None):
-    # user = db_sess.query(User).filter(User.user_id == user.id)[0]
-    # user.warn()
-    # db_sess.commit()
-    msg = f'Пользователь {user.name} получил предупреждение.'
-    if reason:
-        msg += f' Причина: {reason}.'
-    await ctx.send(msg)
+async def warn(ctx, member: discord.Member, reason=None):
+    if check_roles(ctx):
+        user = db_sess.query(User).filter(User.user_id == member.id)[0]
+        user.warn()
+        db_sess.commit()
+        msg = f'Пользователь {member.name} получил предупреждение.'
+        if reason:
+            msg += f' Причина: {reason}.'
+        await ctx.send(msg)
+
+
+@bot.command(name='add_administrator_role')
+async def add_administrator_role(ctx, role: discord.Role):
+    global administration_roles
+    if check_roles(ctx):
+        administration_roles.append(role)
+        await ctx.message.channel.send(f'Роль была добавлена к списку администраторских')
 
 
 @bot.command(name='change_nick')
 async def changenick(ctx, user: discord.Member, *nick):
-    nick = ' '.join(nick)
-    await user.edit(nick=nick)
-    await ctx.send(f'Никнейм пользователя {user.name} был изменён на {user.nick}')
+    if check_roles(ctx):
+        nick = ' '.join(nick)
+        await user.edit(nick=nick)
+        await ctx.send(f'Никнейм пользователя {user.name} был изменён на {user.nick}')
 
 
 @bot.command(name='give_roles')
 async def giveroles(ctx, user: discord.Member, *roles: discord.Role):
-    if not roles:
-        await ctx.send('Должна быть написана хотя бы одна роль.')
-        return
-    await user.add_roles(*roles)
-    if len(roles) == 1:
-        await ctx.send(f"Пользователю {user.name} была выдана роль {roles[0].name}!")
-    else:
-        roles_str = ', '.join(r.name for r in roles)
-        await ctx.send(f"Пользователю {user.name} были выданы роли: {roles_str}.")
+    if check_roles(ctx):
+        if not roles:
+            await ctx.send('Должна быть написана хотя бы одна роль.')
+            return
+        await user.add_roles(*roles)
+        if len(roles) == 1:
+            await ctx.send(f"Пользователю {user.name} была выдана роль {roles[0].name}!")
+        else:
+            roles_str = ', '.join(r.name for r in roles)
+            await ctx.send(f"Пользователю {user.name} были выданы роли: {roles_str}.")
 
 
 @bot.command(name='take_roles')
 async def takeroles(ctx, user: discord.Member, *roles: discord.Role):
-    if not roles:
-        await ctx.send('Должна быть написана хотя бы одна роль.')
-    u_roles = user.roles
-    for r in roles:
-        if r not in u_roles:
-            await ctx.send(f'У пользователя {user.name} нет роли {r.name}.')
-            return
-    await user.remove_roles(*roles)
-    if len(roles) == 1:
-        await ctx.send(f"У пользователя {user.name} была отнята роль {roles[0].name}!")
-    else:
-        roles_str = ', '.join(r.name for r in roles)
-        await ctx.send(f"У пользователя {user.name} были отняты роли: {roles_str}.")
+    if check_roles(ctx):
+        if not roles:
+            await ctx.send('Должна быть написана хотя бы одна роль.')
+        u_roles = user.roles
+        for r in roles:
+            if r not in u_roles:
+                await ctx.send(f'У пользователя {user.name} нет роли {r.name}.')
+                return
+        await user.remove_roles(*roles)
+        if len(roles) == 1:
+            await ctx.send(f"У пользователя {user.name} была отнята роль {roles[0].name}!")
+        else:
+            roles_str = ', '.join(r.name for r in roles)
+            await ctx.send(f"У пользователя {user.name} были отняты роли: {roles_str}.")
 
 
 @bot.command(name='create_role')
 async def createrole(ctx, role_name, color=discord.Colour(0)):
-    guild = ctx.guild
-    await guild.create_role(name=role_name, color=color)
-    await ctx.send(f'Роль {role_name} создалась!')
+    if check_roles(ctx):
+        guild = ctx.guild
+        await guild.create_role(name=role_name, color=color)
+        await ctx.send(f'Роль {role_name} создалась!')
 
 
 @bot.command(name='edit_role_color')
 async def editrolecolor(ctx, role: discord.Role, color: discord.Colour):
-    await role.edit(color=color)
-    await ctx.send(f'Цвет роли {role.name} был изменён на {role.color}(hex).')
+    if check_roles(ctx):
+        await role.edit(color=color)
+        await ctx.send(f'Цвет роли {role.name} был изменён на {role.color}(hex).')
 
 
 @bot.command(name='edit_role_name')
 async def editrolename(ctx, role: discord.Role, *name):
-    prev_name = role.name
-    name_now = ' '.join(name)
-    await role.edit(name=name_now)
-    await ctx.send(f'Имя роли {prev_name} было изменено на {role.name}.')
+    if check_roles(ctx):
+        prev_name = role.name
+        name_now = ' '.join(name)
+        await role.edit(name=name_now)
+        await ctx.send(f'Имя роли {prev_name} было изменено на {role.name}.')
 
 
 @bot.command(name='delete_role')
 async def deleterole(ctx, role: discord.Role):
-    await ctx.send(f"Роль {role.name} удалена!")
-    await role.delete()
+    if check_roles(ctx):
+        await ctx.send(f"Роль {role.name} удалена!")
+        await role.delete()
+
+
+@bot.command(name='statistic')
+async def show_statistic(ctx):
+    author = db_sess.query(User).filter(User.user_id == ctx.message.author.id)[0]
+    days = str(datetime.datetime.now() - author.join_date).split()[0]
+    roles = ctx.message.author.roles
+    output_roles = ''
+    for b in range(len(roles)):
+        if b == 0:
+            continue
+        output_roles = output_roles + f'@{roles[b].name}\n'
+    msg = f'''`Статистика для пользователя: {ctx.message.author}
+Присоединился к серверу: {author.join_date.date()} ({days} дней)
+Количество предупреждений: {author.warns}
+Роли:
+{output_roles}`'''
+    await ctx.send(msg)
+
+
+@bot.command(name='help')
+async def help(ctx, *section):
+    channel = ctx.message.channel
+    if len(section) == 0:
+        msg = f'''Префикс бота - ~
+Категории (Напишите `~help категория`, чтобы получить список команд):
+music
+roles
+users
+administration'''
+    else:
+        category = section[0].lower()
+        if category == 'music':
+            msg = '''Список команд для категории Music:
+            play [запрос или ссылка на видео youtube] - начать проигрывание песни (или добавить ее в очередь)
+            stop - останавливает проигрывание и очищает очередь
+            skip - пропуск текущего трека
+            pause - поставить трек на паузу
+            resume - продолжить проигрывание
+            queue - показывает текущую очередь воспроизведения'''
+        elif category == 'roles':
+            msg = '''Список команд для категории Roles:
+            give_roles [пользователь] [роль или несколько ролей] - выдает пользователю указанные роли (если имеются права на это)
+            take_roles [пользователь] [роль или несколько ролей] - забирает у пользователя указанные роли (если имеются права на это)
+            create_roles [название] [цвет в формате hex или само название] - создает роль заданного цвета без прав
+            edit_role_color [роль] [цвет в формате hex или само название] - изменяет цвет роли (если имеются права на это)
+            edit_role_name [роль] [новое название] - изменяет имя роли (если имеются права на это)
+            delete_role [роль] - удаляет роль (если имеются права на это)
+            Примечание: для использования ролей необходимо иметь роль администратора'''
+        elif category == 'users':
+            msg = '''Список команд для категории Users:
+            change_nick [пользователь] [новый ник] - меняет ник указанного пользователя (необходимо иметь роль администратора)
+            statistics - показывает вашу статистику'''
+        elif category == 'administration':
+            msg = '''Список команд для категории Administration:
+            warn [пользователь] [причина (необязательно)] - выдает предупреждение указанному пользователю
+            mute [пользователь] [причина (необязательно)] - мутит указанного пользователя
+            unmute [пользователь] [причина (необязательно)] - снимает мут с указанного пользователя
+            kick [пользователь] [причина (необязательно)] - кикает указанного пользователя
+            ban [пользователь] [причина (необязательно)] - банит указанного пользователя
+            unban [пользователь] [причина (необязательно)] - снимает бан с указанного пользователя
+            add_administrator_role [уже существующая роль] - добавляет роль в список администраторских
+            Примечание: для использования этих команд вам необходимо иметь роль администратора'''
+    await channel.send(msg)
 
 
 bot.run(TOKEN)
