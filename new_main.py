@@ -9,8 +9,6 @@ import os
 import datetime
 import logging
 
-TOKEN = 'ODI0MTY2OTg3NTQxNjQzMjk0.YFrbUg.NqQGGY9c4M-g7cgsiWsaTzfEYcU'
-YOUTUBE_TOKEN = 'AIzaSyBiF_oZJFMMHYabcICvUk0dJe5QB4yr-Cc'
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='~', intents=intents, help_command=None)
 i = 0
