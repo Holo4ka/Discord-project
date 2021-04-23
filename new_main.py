@@ -5,14 +5,17 @@ import asyncio
 import requests
 from data import db_session
 from data.user import User
-import datetime
+import os
+
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='~', intents=intents)
+LETTERS = ['_', '-', ' ']
+i = 0
 
 ytdl_format_options = {
     'format': 'bestaudio/best',
-    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+    'outtmpl': '%(title)s.webm',
     'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
@@ -31,7 +34,7 @@ ffmpeg_options = {
 ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
 
 players = {}
-queue = asyncio.Queue()
+queue = asyncio.Queue(maxsize=100)
 player = None
 db_session.global_init('db/discord_users.db')
 db_sess = db_session.create_session()
@@ -104,6 +107,88 @@ async def on_member_join(member: discord.Member):
 #         await ctx.send('Неправильный URL.')
 #     elif isinstance(error, commands.errors.DiscordException):
 #         await ctx.send('Что-то пошло не так!')
+
+
+async def play(ctx):
+    try:
+        for _ in range(queue.maxsize):
+            getting = queue.get_nowait()
+            duration, title, current = getting
+            ctx.message.guild.voice_client.play(
+                discord.FFmpegPCMAudio(f'{current}.webm'))
+            await ctx.message.channel.send('Сейчас играет:\n' + '`' + title + '`')
+            await asyncio.sleep(duration + 2)
+            os.remove(f'{current}.webm')
+    except asyncio.QueueEmpty:
+        return
+
+
+@bot.command(name='play')
+async def add_to_queue(ctx, *url):
+    global player, i
+    if len(url) == 0:
+        return
+    elif len(url) == 1 and not is_url(url[0]) and 'https://' in url[0]:
+        raise UrlError
+    elif len(url) != 1 or not is_url(url[0]):
+        url = ' '.join(url)
+        parts = '%20'.join(url.split())
+        res = requests.get(
+            f'https://youtube.googleapis.com/youtube/v3/search?part=snippet&maxResults=25&q={parts}&key={YOUTUBE_TOKEN}').json()
+        id = res['items'][0]['id']['videoId']
+        url = f'https://www.youtube.com/watch?v={id}'
+    elif is_url(url[0]):
+        url = url[0]
+    if player is None:
+        author_channel = ctx.message.author.voice.channel
+        await author_channel.connect()
+        player = ctx.message.guild.voice_client
+    ytdl_format_options['outtmpl'] = f'{i}.webm'
+    await ctx.message.channel.send('Добавлено в очередь:\n' + url)
+    with youtube_dl.YoutubeDL(ytdl_format_options) as ydl:
+        song_info = ydl.extract_info(url, download=True)
+    to_put = (int(song_info['duration']), song_info['title'], i)
+    queue.put_nowait(to_put)
+    i += 1
+    if not player.is_playing():
+        await play(ctx=ctx)
+
+
+@bot.command(pass_context=True, name='stop')
+async def stop(ctx):
+    global queue, player, i
+    ctx.message.guild.voice_client.stop()
+    await ctx.message.guild.voice_client.disconnect()
+    queue = asyncio.Queue()
+    await ctx.message.channel.send('Проигрывание завершено')
+    player = None
+    for a in range(i):
+        os.remove(f'{a}.webm')
+    i = 0
+
+
+@bot.command(pass_context=True, name='skip')
+async def skip(ctx):
+    global queue, player
+    ctx.message.guild.voice_client.stop()
+    if not queue.empty():
+        await ctx.message.channel.send('Трек пропущен')
+        print(player.is_playing())
+        await play(ctx=ctx)
+
+
+@bot.command(pass_context=True, name='pause')
+async def pause(ctx):
+    if ctx.message.guild.voice_client.is_playing():
+        ctx.message.guild.voice_client.pause()
+        await ctx.message.channel.send('Поставлено на паузу')
+
+
+@bot.command(pass_context=True, name='resume')
+async def resume(ctx):
+    if ctx.message.guild.voice_client.is_paused():
+        ctx.message.guild.voice_client.resume()
+        await ctx.message.channel.send('Продолжение проигрывания...')
 
 
 @bot.command(name='ban')
