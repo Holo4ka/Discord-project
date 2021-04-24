@@ -9,9 +9,9 @@ import os
 import datetime
 import logging
 
-
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='~', intents=intents, help_command=None)
+await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.custom, name='Type "~help" for help'))
 i = 0
 
 ytdl_format_options = {
@@ -218,7 +218,9 @@ async def show_queue(ctx):
     songs = ''
     for _ in range(queue.qsize()):
         url = str(await queue.get())
-        songs = songs + url + '\n'
+        with youtube_dl.YoutubeDL(ytdl_format_options) as ydl:
+            song_info = ydl.extract_info(url, download=False)
+        songs = songs + song_info['title'] + '\n'
     msg = f'''Очередь воспроизведения:
 `{songs}`'''
     await channel.send(msg)
