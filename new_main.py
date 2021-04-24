@@ -9,9 +9,9 @@ import os
 import datetime
 import logging
 
+
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='~', intents=intents, help_command=None)
-await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.custom, name='Type "~help" for help'))
 i = 0
 
 ytdl_format_options = {
@@ -82,8 +82,9 @@ def set_admin_roles(guild):
 
 @bot.event
 async def on_ready():
-    global db_sess, OWNER
+    global db_sess
     print(f'{bot.user} подключен к Discord!')
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.custom, name='Type "~help" for help'))
     for guild in bot.guilds:
         print(
             f'{bot.user} подключились к чату:\n'
@@ -461,7 +462,7 @@ delete_role [роль] - удаляет роль (если имеются пра
         elif category == 'users':
             msg = '''Список команд для категории Users:
 change_nick [пользователь] [новый ник] - меняет ник указанного пользователя (необходимо иметь роль администратора)
-statistics - показывает вашу статистику'''
+statistic - показывает вашу статистику'''
         elif category == 'administration':
             msg = '''Список команд для категории Administration:
 warn [пользователь] [причина (необязательно)] - выдает предупреждение указанному пользователю
