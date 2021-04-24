@@ -9,6 +9,7 @@ import os
 import datetime
 import logging
 
+
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='~', intents=intents, help_command=None)
 i = 0
@@ -73,7 +74,7 @@ def set_admin_roles(guild):
     if not administration_roles:
         for j in range(len(guild.roles)):
             if guild.roles[j].name == 'Yandex Lyceum Bot':
-                administration_roles.extend(guild.roles[i + 1:])
+                administration_roles.extend(guild.roles[j + 1:])
     if not administration_roles:
         administration_roles.append(everyone)
     return administration_roles
@@ -98,7 +99,6 @@ async def on_ready():
             db_sess.add(user)
             db_sess.commit()
         set_admin_roles(guild)
-        print(administration_roles)
 
 
 @bot.event
