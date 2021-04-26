@@ -39,7 +39,7 @@ queue = asyncio.Queue(maxsize=1000)
 player = None
 db_session.global_init('db/discord_users.db')
 db_sess = db_session.create_session()
-OWNER = None
+title = None
 administration_roles = []
 
 
@@ -84,7 +84,6 @@ def set_admin_roles(guild):
 async def on_ready():
     global db_sess
     print(f'{bot.user} подключен к Discord!')
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.custom, name='Type "~help" for help'))
     for guild in bot.guilds:
         print(
             f'{bot.user} подключились к чату:\n'
@@ -100,6 +99,7 @@ async def on_ready():
             db_sess.add(user)
             db_sess.commit()
         set_admin_roles(guild)
+        print(administration_roles)
 
 
 @bot.event
@@ -130,6 +130,7 @@ async def on_command_error(ctx, error):
 
 
 async def play(ctx):
+    global title
     try:
         for _ in range(queue.maxsize):
             getting = queue.get_nowait()
@@ -148,7 +149,7 @@ async def add_to_queue(ctx, *url):
     try:
         if len(url) == 0:
             return
-        elif (len(url) == 1 and not is_url(url[0])) or 'https://' in url[0]:
+        elif len(url) == 1 and not is_url(url[0]):
             raise UrlError
         elif len(url) != 1 or not is_url(url[0]):
             url = ' '.join(url)
@@ -181,7 +182,7 @@ async def stop(ctx):
     global queue, player, i
     ctx.message.guild.voice_client.stop()
     await ctx.message.guild.voice_client.disconnect()
-    queue = asyncio.Queue()
+    queue = asyncio.Queue(maxsize=1000)
     await ctx.message.channel.send('Проигрывание завершено')
     player = None
     for a in range(i):
@@ -215,15 +216,17 @@ async def resume(ctx):
 
 @bot.command(name='queue')
 async def show_queue(ctx):
+    global title
     channel = ctx.message.channel
     songs = ''
+    now = f'{title} (играет сейчас)'
     for _ in range(queue.qsize()):
-        url = str(await queue.get())
-        with youtube_dl.YoutubeDL(ytdl_format_options) as ydl:
-            song_info = ydl.extract_info(url, download=False)
-        songs = songs + song_info['title'] + '\n'
+        url = await queue.get()
+        songs = songs + url[1] + '\n'
+        await queue.put(url)
     msg = f'''Очередь воспроизведения:
-`{songs}`'''
+`{now}
+{songs}`'''
     await channel.send(msg)
 
 
@@ -321,8 +324,20 @@ async def warn(ctx, member: discord.Member, reason=None):
 async def add_administrator_role(ctx, role: discord.Role):
     global administration_roles
     if check_roles(ctx):
-        administration_roles.append(role)
+        administration_roles.insert(0, role)
         await ctx.message.channel.send(f'Роль была добавлена к списку администраторских')
+    else:
+        await ctx.message.channel.send('У вас нет прав на эту команду')
+
+
+@bot.command(name='del_administrator_role')
+async def del_administrator_role(ctx, role: discord.Role):
+    author = ctx.message.author
+    role_index = administration_roles.index(author.roles[-1])
+    del_role_index = administration_roles.index(role)
+    if check_roles(ctx) and role_index > del_role_index:
+        del administration_roles[del_role_index]
+        await ctx.message.channel.send(f'Роль {role} больше не является администраторской')
     else:
         await ctx.message.channel.send('У вас нет прав на эту команду')
 
