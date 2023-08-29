@@ -11,14 +11,14 @@ import logging
 import yt_dlp
 from yandex_music import ClientAsync, Track
 
-TOKEN = 'ODI0MTY2OTg3NTQxNjQzMjk0.YFrbUg.JR7u7JpVPX6NCd-9ZaLWqZ5i1rY'
-YOUTUBE_TOKEN = 'AIzaSyBiF_oZJFMMHYabcICvUk0dJe5QB4yr-Cc'
+TOKEN = ''  # Токен скрыт в целях безопасности
+YOUTUBE_TOKEN = ''  # Токен скрыт в целях безопасности
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='~', intents=intents, help_command=None)
 isses = {}
 
 loop = asyncio.get_event_loop()
-YANDEX_TOKEN = 'y0_AgAAAAAzx7wIAAG8XgAAAADrMmzHLc80sg-FQf6-lwRZm7VHlo9oYMY'
+YANDEX_TOKEN = ''  # Токен скрыт в целях безопасности
 yandex_client = loop.run_until_complete(ClientAsync(YANDEX_TOKEN).init())
 
 
