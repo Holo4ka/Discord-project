@@ -1,5 +1,5 @@
 import discord
-import youtube_dl
+import pytube
 from discord.ext import commands
 import asyncio
 import requests
@@ -8,11 +8,19 @@ from data.user import User
 import os
 import datetime
 import logging
+import yt_dlp
+from yandex_music import ClientAsync, Track
 
-
+TOKEN = 'ODI0MTY2OTg3NTQxNjQzMjk0.YFrbUg.JR7u7JpVPX6NCd-9ZaLWqZ5i1rY'
+YOUTUBE_TOKEN = 'AIzaSyBiF_oZJFMMHYabcICvUk0dJe5QB4yr-Cc'
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='~', intents=intents, help_command=None)
-i = 0
+isses = {}
+
+loop = asyncio.get_event_loop()
+YANDEX_TOKEN = 'y0_AgAAAAAzx7wIAAG8XgAAAADrMmzHLc80sg-FQf6-lwRZm7VHlo9oYMY'
+yandex_client = loop.run_until_complete(ClientAsync(YANDEX_TOKEN).init())
+
 
 ytdl_format_options = {
     'format': 'bestaudio/best',
@@ -32,63 +40,79 @@ ffmpeg_options = {
     'options': '-vn'
 }
 
-ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
 logging.basicConfig(filename='logs.txt', level=20)
 players = {}
-queue = asyncio.Queue(maxsize=1000)
 player = None
 db_session.global_init('db/discord_users.db')
 db_sess = db_session.create_session()
-title = None
-administration_roles = []
+administration_roles = {}
+servers = {}
+queues = {}
+titles = {}
 
 
 class UrlError(Exception):
     pass
 
 
-def is_url(string: str):
+def set_queues():
+    for id in servers.keys():
+        queues[id] = asyncio.Queue(maxsize=1000)
+
+
+def youtube_url(string: str):
     protocol = string.startswith('https://') or string.startswith('http://')
     address = 'youtube.com' in string
     params = 'watch?v=' in string
     return protocol and address and params
 
 
+def yandex_url(string: str):
+    protocol = string.startswith('https://') or string.startswith('http://')
+    address = 'music.yandex.ru' in string
+    params = 'album' in string and 'track' in string
+    return protocol and address and params
+
+
 def check_roles(ctx):
     author = ctx.message.author
     administrator = False
-    for role in administration_roles:
-        if role in author.roles:
-            administrator = True
-            break
+    for role in administration_roles[ctx.message.guild.id]:
+        for adm_role in author.roles:
+            if role == adm_role.name:
+                administrator = True
+                break
     return administrator
 
 
 def set_admin_roles(guild):
-    global administration_roles
+    administration_roles = []
     for role in guild.roles:
         if role.permissions.administrator:
-            administration_roles.append(role)
+            administration_roles.append(role.name)
         elif role.name == '@everyone':
             everyone = role
     if not administration_roles:
         for j in range(len(guild.roles)):
             if guild.roles[j].name == 'Yandex Lyceum Bot':
                 administration_roles.extend(guild.roles[j + 1:])
-    if not administration_roles:
-        administration_roles.append(everyone)
+    if not administration_roles or (len(administration_roles) == 1 and administration_roles[0] == 'Yandex Lyceum Bot'):
+        administration_roles.append(everyone.name)
     return administration_roles
 
 
 @bot.event
 async def on_ready():
-    global db_sess
+    global db_sess, servers
     print(f'{bot.user} подключен к Discord!')
     for guild in bot.guilds:
         print(
             f'{bot.user} подключились к чату:\n'
             f'{guild.name}(id: {guild.id})\n'
         )
+        servers[guild.id] = None
+        isses[guild.id] = 0
+        titles[guild.id] = ''
         users_id = [int(user.user_id) for user in db_sess.query(User).all()]
         for elem in guild.members:
             if elem.id in users_id:
@@ -98,8 +122,8 @@ async def on_ready():
             user.join_date = elem.joined_at
             db_sess.add(user)
             db_sess.commit()
-        set_admin_roles(guild)
-        print(administration_roles)
+        administration_roles[guild.id] = set_admin_roles(guild)
+        set_queues()
 
 
 @bot.event
@@ -129,75 +153,93 @@ async def on_command_error(ctx, error):
         await ctx.send('Что-то пошло не так!')
 
 
-async def play(ctx):
-    global title
+async def play(ctx, id):
     try:
-        for _ in range(queue.maxsize):
-            getting = queue.get_nowait()
-            duration, title, current = getting
+        for _ in range(queues[id].maxsize):
+            getting = queues[id].get_nowait()
+            duration, titles[id], current = getting
             ctx.message.guild.voice_client.play(
-                discord.FFmpegPCMAudio(f'{current}.webm'))
-            await ctx.message.channel.send('Сейчас играет:\n' + '`' + title + '`')
+                discord.FFmpegPCMAudio(f'{current}_{ctx.message.guild.id}.mp3', executable='ffmpeg.exe'))
+            await ctx.message.channel.send('Сейчас играет:\n' + '`' + titles[id] + '`')
             await asyncio.sleep(duration + 2)
     except asyncio.QueueEmpty:
         return
 
 
 @bot.command(name='play')
-async def add_to_queue(ctx, *url):
-    global player, i
+async def add_to_queue(ctx, *url):  # TODO: Яндекс ссылка
+    global player, isses
     try:
         if len(url) == 0:
             return
-        elif len(url) == 1 and not is_url(url[0]):
-            raise UrlError
-        elif len(url) != 1 or not is_url(url[0]):
+        elif len(url) != 1:
             url = ' '.join(url)
             parts = '%20'.join(url.split())
             res = requests.get(
                 f'https://youtube.googleapis.com/youtube/v3/search?part=snippet&maxResults=25&q={parts}&key={YOUTUBE_TOKEN}').json()
             id = res['items'][0]['id']['videoId']
             url = f'https://www.youtube.com/watch?v={id}'
-        elif is_url(url[0]):
+            way = 'youtube'
+        elif youtube_url(url[0]):
             url = url[0]
+            way = 'youtube'
+        elif yandex_url(url[0]):
+            way = 'yandex'
+            url = url[0]
+        elif len(url) == 1 and not youtube_url(url[0]) and not yandex_url(url[0]):
+            raise UrlError
+        player = servers[ctx.message.guild.id]
         if player is None:
             author_channel = ctx.message.author.voice.channel
             await author_channel.connect()
-            player = ctx.message.guild.voice_client
-        ytdl_format_options['outtmpl'] = f'{i}.webm'
+            servers[ctx.message.guild.id] = player = ctx.message.guild.voice_client
         await ctx.message.channel.send('Добавлено в очередь:\n' + url)
-        with youtube_dl.YoutubeDL(ytdl_format_options) as ydl:
-            song_info = ydl.extract_info(url, download=True)
-        to_put = (int(song_info['duration']), song_info['title'], i)
-        queue.put_nowait(to_put)
-        i += 1
+        with yt_dlp.YoutubeDL(ytdl_format_options) as ydl:
+            song_info = ydl.extract_info(url, download=False)
+        if way == 'youtube':
+            yt = pytube.YouTube(url)
+            yt.streams.last().download('E:\Яндекс.Лицей\Discord-project', filename=f'{isses[ctx.message.guild.id]}_{str(ctx.message.guild.id)}.mp3')
+            to_put = (int(song_info['duration']), yt.title, isses[ctx.message.guild.id])
+        elif way == 'yandex':
+            parts = url.split('/')
+            alb = parts[4]
+            num = parts[6]
+            track_list = await yandex_client.tracks([f'{num}:{alb}'])
+            filename = f'{isses[ctx.message.guild.id]}_{str(ctx.message.guild.id)}.mp3'
+            track = track_list[0]
+            await track.download_async(filename=f"E:\Яндекс.Лицей\Discord-project\\{filename}")
+            duration = track.duration_ms
+            title = track.title
+            to_put = (int(duration), title, isses[ctx.message.guild.id])
+        queues[ctx.message.guild.id].put_nowait(to_put)
+        isses[ctx.message.guild.id] += 1
         if not player.is_playing():
-            await play(ctx=ctx)
+            await play(ctx=ctx, id=ctx.message.guild.id)
     except UrlError:
         await ctx.message.channel.send('Неправильный URL.')
 
 
 @bot.command(pass_context=True, name='stop')
 async def stop(ctx):
-    global queue, player, i
+    global queue, player, isses
     ctx.message.guild.voice_client.stop()
     await ctx.message.guild.voice_client.disconnect()
-    queue = asyncio.Queue(maxsize=1000)
+    queues[ctx.message.guild.id] = asyncio.Queue(maxsize=1000)
     await ctx.message.channel.send('Проигрывание завершено')
-    player = None
-    for a in range(i):
-        os.remove(f'{a}.webm')
-    i = 0
+    servers[ctx.message.guild.id] = None
+    for a in range(isses[ctx.message.guild.id]):
+        os.remove(f'{a}_{ctx.message.guild.id}.mp3')
+    isses[ctx.message.guild.id] = 0
 
 
 @bot.command(pass_context=True, name='skip')
 async def skip(ctx):
     global queue, player
     ctx.message.guild.voice_client.stop()
-    if not queue.empty():
+    if not queues[ctx.message.guild.id].empty():
         await ctx.message.channel.send('Трек пропущен')
         print(player.is_playing())
-        await play(ctx=ctx)
+        await play(ctx=ctx, id=ctx.message.guild.id)
 
 
 @bot.command(pass_context=True, name='pause')
@@ -216,14 +258,14 @@ async def resume(ctx):
 
 @bot.command(name='queue')
 async def show_queue(ctx):
-    global title
     channel = ctx.message.channel
     songs = ''
-    now = f'{title} (играет сейчас)'
-    for _ in range(queue.qsize()):
-        url = await queue.get()
+    title = titles[ctx.message.guild.id]
+    now = f'{titles[ctx.message.guild.id]} (играет сейчас)'
+    for _ in range(queues[ctx.message.guild.id].qsize()):
+        url = await queues[ctx.message.guild.id].get()
         songs = songs + url[1] + '\n'
-        await queue.put(url)
+        await queues[ctx.message.guild.id].put(url)
     msg = f'''Очередь воспроизведения:
 `{now}
 {songs}`'''
@@ -306,25 +348,11 @@ async def unmute(ctx, user: discord.Member):
         await ctx.message.channel.send('У вас нет прав на эту команду')
 
 
-@bot.command(name='warn', pass_context=True)
-async def warn(ctx, member: discord.Member, reason=None):
-    if check_roles(ctx):
-        user = db_sess.query(User).filter(User.user_id == member.id)[0]
-        user.warn()
-        db_sess.commit()
-        msg = f'Пользователь {member.name} получил предупреждение.'
-        if reason:
-            msg += f' Причина: {reason}.'
-        await ctx.send(msg)
-    else:
-        await ctx.message.channel.send('У вас нет прав на эту команду')
-
-
 @bot.command(name='add_administrator_role')
 async def add_administrator_role(ctx, role: discord.Role):
     global administration_roles
     if check_roles(ctx):
-        administration_roles.insert(0, role)
+        administration_roles[ctx.message.guild.id].insert(0, role.name)
         await ctx.message.channel.send(f'Роль была добавлена к списку администраторских')
     else:
         await ctx.message.channel.send('У вас нет прав на эту команду')
@@ -332,14 +360,27 @@ async def add_administrator_role(ctx, role: discord.Role):
 
 @bot.command(name='del_administrator_role')
 async def del_administrator_role(ctx, role: discord.Role):
+    global administration_roles
     author = ctx.message.author
-    role_index = administration_roles.index(author.roles[-1])
-    del_role_index = administration_roles.index(role)
+    role_index = administration_roles[ctx.message.guild.id].index(author.roles[-1].name)
+    del_role_index = administration_roles[ctx.message.guild.id].index(role.name)
     if check_roles(ctx) and role_index > del_role_index:
-        del administration_roles[del_role_index]
+        del administration_roles[ctx.message.guild.id][del_role_index]
         await ctx.message.channel.send(f'Роль {role} больше не является администраторской')
     else:
         await ctx.message.channel.send('У вас нет прав на эту команду')
+
+
+@bot.command(name='check_administrator_roles')
+async def check_adm_roles(ctx):
+    author = ctx.message.author
+    if check_roles(ctx):
+        roles_list = []
+        for role in administration_roles[ctx.message.guild.id]:
+            roles_list.append(role)
+        output = '\n'.join(roles_list)
+        await ctx.message.channel.send(f'''Список администраторских ролей для этого сервера:
+{output}''')
 
 
 @bot.command(name='change_nick')
@@ -439,7 +480,6 @@ async def show_statistic(ctx):
         output_roles = output_roles + f'@{roles[b].name}\n'
     msg = f'''`Статистика для пользователя: {ctx.message.author}
 Присоединился к серверу: {author.join_date.date()} ({days} дней)
-Количество предупреждений: {author.warns}
 Роли:
 {output_roles}`'''
     await ctx.send(msg)
@@ -451,10 +491,10 @@ async def help(ctx, *section):
     if len(section) == 0:
         msg = f'''Префикс бота - ~
 Категории (Напишите `~help категория`, чтобы получить список команд):
-music
-roles
-users
-administration'''
+• music
+• roles
+• users
+• administration'''
     else:
         category = section[0].lower()
         if category == 'music':
@@ -480,7 +520,6 @@ change_nick [пользователь] [новый ник] - меняет ник
 statistic - показывает вашу статистику'''
         elif category == 'administration':
             msg = '''Список команд для категории Administration:
-warn [пользователь] [причина (необязательно)] - выдает предупреждение указанному пользователю
 mute [пользователь] [причина (необязательно)] - мутит указанного пользователя
 unmute [пользователь] [причина (необязательно)] - снимает мут с указанного пользователя
 kick [пользователь] [причина (необязательно)] - кикает указанного пользователя
@@ -488,8 +527,26 @@ ban [пользователь] [причина (необязательно)] - �
 unban [пользователь] [причина (необязательно)] - снимает бан с указанного пользователя
 add_administrator_role [уже существующая роль] - добавляет роль в список администраторских
 del_administrator_role [уже существующая роль] - удаляет роль из списка администраторских
-Примечание: для использования этих команд вам необходимо иметь роль администратора'''
+check_administrator_roles - вывод списка администраторских ролей
+Примечания: 
+1. Для использования этих команд вам необходимо иметь роль администратора
+2. При перезапуске бота придется заново назначать роли администратора'''
+        else:
+            msg = 'Я не знаю такой категории'
     await channel.send(msg)
+
+
+@bot.command(name='alert')
+async def say_alert(ctx, *msg):
+    msg = ' '.join(msg)
+    guild = ctx.message.guild
+    if guild.id == 407923846654459917:
+        for guild in bot.guilds:
+            for category in guild.channels:
+                for channel in category.channels:
+                    await channel.send(msg)
+                    break
+                break
 
 
 bot.run(TOKEN)
