@@ -11,13 +11,13 @@ import logging
 import yt_dlp
 from yandex_music import ClientAsync, Track
 
-TOKEN = ''  # Токен скрыт в целях безопасности
+TOKEN = ''
 YOUTUBE_TOKEN = ''  # Токен скрыт в целях безопасности
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='~', intents=intents, help_command=None)
 isses = {}
-
 loop = asyncio.get_event_loop()
+
 YANDEX_TOKEN = ''  # Токен скрыт в целях безопасности
 yandex_client = loop.run_until_complete(ClientAsync(YANDEX_TOKEN).init())
 
@@ -40,7 +40,7 @@ ffmpeg_options = {
     'options': '-vn'
 }
 
-logging.basicConfig(filename='logs.txt', level=20)
+#  logging.basicConfig(filename='logs.txt', level=20)
 players = {}
 player = None
 db_session.global_init('db/discord_users.db')
@@ -67,11 +67,21 @@ def youtube_url(string: str):
     return protocol and address and params
 
 
+def youtube_shorter_url(string: str):
+    protocol = string.startswith('https://') or string.startswith('http://')
+    address = 'youtu.be' in string
+    return protocol and address
+
+
 def yandex_url(string: str):
     protocol = string.startswith('https://') or string.startswith('http://')
     address = 'music.yandex.ru' in string
     params = 'album' in string and 'track' in string
     return protocol and address and params
+
+
+def any_url(string: str):
+    return string.startswith('https://') or string.startswith('http://')
 
 
 def check_roles(ctx):
@@ -167,7 +177,7 @@ async def play(ctx, id):
 
 
 @bot.command(name='play')
-async def add_to_queue(ctx, *url):  # TODO: Яндекс ссылка
+async def add_to_queue(ctx, *url):
     global player, isses
     try:
         if len(url) == 0:
@@ -183,9 +193,20 @@ async def add_to_queue(ctx, *url):  # TODO: Яндекс ссылка
         elif youtube_url(url[0]):
             url = url[0]
             way = 'youtube'
+        elif youtube_shorter_url(url[0]):
+            id = url[0].split('/')[-1].split('?')[0]
+            url = f'https://www.youtube.com/watch?v={id}'
+            way = 'youtube'
         elif yandex_url(url[0]):
             way = 'yandex'
             url = url[0]
+        elif len(url) == 1 and not any_url(url[0]):
+            search = url[0]
+            res = requests.get(
+                f'https://youtube.googleapis.com/youtube/v3/search?part=snippet&maxResults=25&q={search}&key={YOUTUBE_TOKEN}').json()
+            id = res['items'][0]['id']['videoId']
+            url = f'https://www.youtube.com/watch?v={id}'
+            way = 'youtube'
         elif len(url) == 1 and not youtube_url(url[0]) and not yandex_url(url[0]):
             raise UrlError
         player = servers[ctx.message.guild.id]
@@ -193,7 +214,7 @@ async def add_to_queue(ctx, *url):  # TODO: Яндекс ссылка
             author_channel = ctx.message.author.voice.channel
             await author_channel.connect()
             servers[ctx.message.guild.id] = player = ctx.message.guild.voice_client
-        await ctx.message.channel.send('Добавлено в очередь:\n' + url)
+        await ctx.message.channel.send('Добавлено в очередь:\n' + '`' + url + '`')
         with yt_dlp.YoutubeDL(ytdl_format_options) as ydl:
             song_info = ydl.extract_info(url, download=False)
         if way == 'youtube':
@@ -253,14 +274,13 @@ async def pause(ctx):
 async def resume(ctx):
     if ctx.message.guild.voice_client.is_paused():
         ctx.message.guild.voice_client.resume()
-        await ctx.message.channel.send('Продолжение проигрывания...')
+        await ctx.message.channel.send('Продолжение проигрывания')
 
 
 @bot.command(name='queue')
 async def show_queue(ctx):
     channel = ctx.message.channel
     songs = ''
-    title = titles[ctx.message.guild.id]
     now = f'{titles[ctx.message.guild.id]} (играет сейчас)'
     for _ in range(queues[ctx.message.guild.id].qsize()):
         url = await queues[ctx.message.guild.id].get()
