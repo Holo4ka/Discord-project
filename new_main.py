@@ -1,5 +1,4 @@
 import discord
-import pytube
 from discord.ext import commands
 import asyncio
 import requests
@@ -10,6 +9,8 @@ import datetime
 import logging
 import yt_dlp
 from yandex_music import ClientAsync, Track
+import pafy
+
 
 TOKEN = ''
 YOUTUBE_TOKEN = ''  # Токен скрыт в целях безопасности
@@ -19,34 +20,35 @@ isses = {}
 loop = asyncio.get_event_loop()
 
 YANDEX_TOKEN = ''  # Токен скрыт в целях безопасности
-yandex_client = loop.run_until_complete(ClientAsync(YANDEX_TOKEN).init())
+# yandex_client = loop.run_until_complete(ClientAsync(YANDEX_TOKEN).init())
 
 
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '',
     'restrictfilenames': True,
-    'noplaylist': True,
     'nocheckcertificate': True,
     'ignoreerrors': True,
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0'  # bind to ipv4 since ipv6 addresses cause issues sometimes
+    'source_address': '0.0.0.0'  # bind to ipv4 since ipv6 addresses cause issues sometimes  --verbose
 }
 
-ffmpeg_options = {
+FFMPEG_OPTIONS = {
+
     'options': '-vn'
 }
 
-#  logging.basicConfig(filename='logs.txt', level=20)
+# logging.basicConfig(filename='logs.txt', level=0)
 players = {}
 player = None
 db_session.global_init('db/discord_users.db')
 db_sess = db_session.create_session()
 administration_roles = {}
 servers = {}
+voices = {}
 queues = {}
 titles = {}
 
@@ -95,6 +97,14 @@ def check_roles(ctx):
     return administrator
 
 
+def same_voice(ctx):
+    global player
+    author_ch = ctx.message.author.voice.channel
+    a = set(voices.keys())
+    current_ch = None if ctx.message.guild.id not in voices.keys() else voices[ctx.message.guild.id]
+    return author_ch == current_ch or current_ch is None
+
+
 def set_admin_roles(guild):
     administration_roles = []
     for role in guild.roles:
@@ -134,6 +144,7 @@ async def on_ready():
             db_sess.commit()
         administration_roles[guild.id] = set_admin_roles(guild)
         set_queues()
+    print('Готов к работе')
 
 
 @bot.event
@@ -163,6 +174,20 @@ async def on_command_error(ctx, error):
         await ctx.send('Что-то пошло не так!')
 
 
+@bot.command(name="test")
+async def nplay(ctx, *url):
+    global player
+    if player is None:
+        author_channel = ctx.message.author.voice.channel
+        voices[ctx.message.guild.id] = author_channel
+        await author_channel.connect()
+        servers[ctx.message.guild.id] = player = ctx.message.guild.voice_client
+    song = pafy.new(url[0])
+    audio = song.getbestaudio()
+    source = discord.FFmpegPCMAudio(audio.url, **FFMPEG_OPTIONS)
+    ctx.message.guild.voice_client.play(source)
+
+
 async def play(ctx, id):
     try:
         for _ in range(queues[id].maxsize):
@@ -180,6 +205,8 @@ async def play(ctx, id):
 async def add_to_queue(ctx, *url):
     global player, isses
     try:
+        if not same_voice(ctx):
+            return
         if len(url) == 0:
             return
         elif len(url) != 1:
@@ -212,19 +239,24 @@ async def add_to_queue(ctx, *url):
         player = servers[ctx.message.guild.id]
         if player is None:
             author_channel = ctx.message.author.voice.channel
+            voices[ctx.message.guild.id] = author_channel
             await author_channel.connect()
             servers[ctx.message.guild.id] = player = ctx.message.guild.voice_client
         await ctx.message.channel.send('Добавлено в очередь:\n' + '`' + url + '`')
-        with yt_dlp.YoutubeDL(ytdl_format_options) as ydl:
-            song_info = ydl.extract_info(url, download=False)
         if way == 'youtube':
-            yt = pytube.YouTube(url)
-            yt.streams.last().download('E:\Яндекс.Лицей\Discord-project', filename=f'{isses[ctx.message.guild.id]}_{str(ctx.message.guild.id)}.mp3')
-            to_put = (int(song_info['duration']), yt.title, isses[ctx.message.guild.id])
+            ydl_opts = {
+                'format': 'bestaudio/best',  # берем самое лучшее качество видео и фото
+                'outtmpl': f'{isses[ctx.message.guild.id]}_{str(ctx.message.guild.id)}.mp3',  # Имя файла
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                song_info = ydl.extract_info(url, download=False)
+                ydl.download(url)
+                to_put = (int(song_info['duration']), song_info['title'], isses[ctx.message.guild.id])
         elif way == 'yandex':
             parts = url.split('/')
             alb = parts[4]
             num = parts[6]
+            yandex_client = []
             track_list = await yandex_client.tracks([f'{num}:{alb}'])
             filename = f'{isses[ctx.message.guild.id]}_{str(ctx.message.guild.id)}.mp3'
             track = track_list[0]
@@ -238,6 +270,21 @@ async def add_to_queue(ctx, *url):
             await play(ctx=ctx, id=ctx.message.guild.id)
     except UrlError:
         await ctx.message.channel.send('Неправильный URL.')
+
+
+@bot.command(pass_context=True, name='move')
+async def move(ctx):
+    global player
+    voice_members = voices[ctx.message.guild.id].members
+    if len(voice_members) == 1:
+        new_channel = ctx.message.author.voice.channel
+        await ctx.message.guild.voice_client.move_to(new_channel)
+        voices[ctx.message.guild.id] = new_channel
+        await skip(ctx)
+        await ctx.message.channel.send('Меняю канал')
+    else:
+        await ctx.message.channel.send('Я не могу поменять канал, так как у меня уже есть слушатели')
+        return
 
 
 @bot.command(pass_context=True, name='stop')
@@ -280,15 +327,16 @@ async def resume(ctx):
 @bot.command(name='queue')
 async def show_queue(ctx):
     channel = ctx.message.channel
-    songs = ''
+    strings = []
     now = f'{titles[ctx.message.guild.id]} (играет сейчас)'
-    for _ in range(queues[ctx.message.guild.id].qsize()):
+    for i in range(queues[ctx.message.guild.id].qsize()):
         url = await queues[ctx.message.guild.id].get()
-        songs = songs + url[1] + '\n'
         await queues[ctx.message.guild.id].put(url)
+        strings.append(f'{i + 2} - {url[1]}')
+    output = "\n".join(strings)
     msg = f'''Очередь воспроизведения:
-`{now}
-{songs}`'''
+`1 -  {now}
+ {output}`'''
     await channel.send(msg)
 
 
@@ -557,6 +605,7 @@ check_administrator_roles - вывод списка администраторс
 
 
 @bot.command(name='alert')
+@commands.has_permissions(administrator=True)
 async def say_alert(ctx, *msg):
     msg = ' '.join(msg)
     guild = ctx.message.guild
@@ -567,6 +616,21 @@ async def say_alert(ctx, *msg):
                     await channel.send(msg)
                     break
                 break
+
+
+@bot.command(name='die')
+@commands.has_permissions(administrator=True)
+async def die(ctx):
+    global player
+    if player:
+        if player.is_playing():
+            await stop(ctx)
+    for guild in bot.guilds:
+        for channel in guild.channels:
+            if channel.id == 522053860710416394:
+                await channel.send('Бот отключается')
+    print('\nПрекращение работы бота')
+    await bot.close()
 
 
 bot.run(TOKEN)
